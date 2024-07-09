@@ -22,6 +22,7 @@ require (
 	github.com/civo/civogo v0.3.70
 	github.com/cloudflare/cloudflare-go v0.98.0
 	github.com/cloudfoundry-community/go-cfclient v0.0.0-20190201205600-f136f9222381
+	github.com/coredns/caddy v1.1.1
 	github.com/datawire/ambassador v1.12.4
 	github.com/denverdino/aliyungo v0.0.0-20230411124812-ab98a9173ace
 	github.com/digitalocean/godo v1.118.0
