@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/miekg/dns"
+	log "github.com/sirupsen/logrus"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/external-dns/endpoint"
 	"sigs.k8s.io/external-dns/plan"
@@ -59,6 +60,7 @@ func (m RFC1035Manager) Records(ctx context.Context) ([]*endpoint.Endpoint, erro
 	if err != nil {
 		return nil, err
 	}
+
 	// Parse it
 	err = m.zoneEditor.LoadZone(zone)
 	// Get all records for every zone
@@ -92,5 +94,13 @@ func (m RFC1035Manager) Records(ctx context.Context) ([]*endpoint.Endpoint, erro
 
 func (m RFC1035Manager) ApplyChanges(ctx context.Context, changes *plan.Changes) error {
 	//TODO implement me
-	panic("implement me")
+
+	for _, change := range changes.Create {
+		logFields := log.Fields{
+			"record":   change.DNSName,
+			"type":     change.RecordType,
+		}
+		log.WithFields(logFields).Info("Creating Record")
+	}
+	return nil
 }

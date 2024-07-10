@@ -51,6 +51,7 @@ import (
 	"sigs.k8s.io/external-dns/provider/civo"
 	"sigs.k8s.io/external-dns/provider/cloudflare"
 	"sigs.k8s.io/external-dns/provider/coredns"
+	"sigs.k8s.io/external-dns/provider/corednsk8s"
 	"sigs.k8s.io/external-dns/provider/designate"
 	"sigs.k8s.io/external-dns/provider/digitalocean"
 	"sigs.k8s.io/external-dns/provider/dnsimple"
@@ -158,8 +159,8 @@ func main() {
 		TraefikDisableNew:              cfg.TraefikDisableNew,
 	}
 
-	// Lookup all the selected sources by names and pass them the desired configuration.
-	sources, err := source.ByNames(ctx, &source.SingletonClientGenerator{
+
+	clientGenerator := &source.SingletonClientGenerator{
 		KubeConfig:   cfg.KubeConfig,
 		APIServerURL: cfg.APIServerURL,
 		// If update events are enabled, disable timeout.
@@ -169,7 +170,10 @@ func main() {
 			}
 			return cfg.RequestTimeout
 		}(),
-	}, cfg.Sources, sourceCfg)
+	}
+	
+	// Lookup all the selected sources by names and pass them the desired configuration.
+	sources, err := source.ByNames(ctx, clientGenerator, cfg.Sources, sourceCfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -285,6 +289,8 @@ func main() {
 		)
 	case "coredns", "skydns":
 		p, err = coredns.NewCoreDNSProvider(domainFilter, cfg.CoreDNSPrefix, cfg.DryRun)
+	case "corednsk8s":
+		p, err = corednsk8s.NewCoreDNSProvider(domainFilter, clientGenerator, cfg.DryRun)
 	case "rdns":
 		p, err = rdns.NewRDNSProvider(
 			rdns.RDNSConfig{

@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/external-dns/provider/corednsk8s/editor"
 	"sigs.k8s.io/external-dns/provider/corednsk8s/k8s"
 	"sigs.k8s.io/external-dns/provider/corednsk8s/manager"
+	"sigs.k8s.io/external-dns/source"
 )
 
 type coreDNSk8sProvider struct {
@@ -24,7 +25,11 @@ type coreDNSk8sProvider struct {
 }
 
 // NewCoreDNSProvider creates a new CoreDNS provider.
-func NewCoreDNSProvider(dryRun bool, client kubernetes.Interface) (*coreDNSk8sProvider, error) {
+func NewCoreDNSProvider(domainFilter endpoint.DomainFilter, c source.ClientGenerator, dryRun bool) (*coreDNSk8sProvider, error) {
+	client, err := c.KubeClient()
+	if err != nil {
+		return nil, err
+	}
 	p := &coreDNSk8sProvider{
 		dryRun:     dryRun,
 		client:     client,
