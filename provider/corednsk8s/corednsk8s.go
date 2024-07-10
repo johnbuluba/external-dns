@@ -24,8 +24,14 @@ type coreDNSk8sProvider struct {
 	manager           CoreDNSManager
 }
 
+type CoreDNSConfig struct {
+	CoreDNSDeployment string
+	CoreDNSConfigMap string
+	CoreDNSNamespace string
+}
+
 // NewCoreDNSProvider creates a new CoreDNS provider.
-func NewCoreDNSProvider(domainFilter endpoint.DomainFilter, c source.ClientGenerator, dryRun bool) (*coreDNSk8sProvider, error) {
+func NewCoreDNSProvider(domainFilter endpoint.DomainFilter, c source.ClientGenerator, cfg CoreDNSConfig, dryRun bool) (*coreDNSk8sProvider, error) {
 	client, err := c.KubeClient()
 	if err != nil {
 		return nil, err
@@ -35,7 +41,7 @@ func NewCoreDNSProvider(domainFilter endpoint.DomainFilter, c source.ClientGener
 		client:     client,
 		zoneEditor: editor.NewZoneEditor(),
 	}
-	if mgr, err := manager.NewRFC1035Manager(client); err == nil {
+	if mgr, err := manager.NewRFC1035Manager(client, cfg.CoreDNSDeployment, cfg.CoreDNSConfigMap, cfg.CoreDNSNamespace); err == nil {
 		p.manager = mgr
 	} else {
 		return nil, err

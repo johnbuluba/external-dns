@@ -21,13 +21,13 @@ type RFC1035Manager struct {
 }
 
 // NewRFC1035Manager creates a new RFC1035 manager.
-func NewRFC1035Manager(client kubernetes.Interface) (*RFC1035Manager, error) {
+func NewRFC1035Manager(client kubernetes.Interface, deployment, configMap, ns string) (*RFC1035Manager, error) {
 	m := &RFC1035Manager{
 		client:            client,
 		zoneEditor:        editor.NewZoneEditor(),
 		coreDNSEditor:     editor.NewCoreDNSConfigEditor(),
-		coreDNSConfigMap:  k8s.NewConfigMap(client.CoreV1(), "kube-system", "coredns"),
-		coreDNSDeployment: k8s.NewDeployment(client.AppsV1(), "kube-system", "coredns", "coredns"),
+		coreDNSConfigMap:  k8s.NewConfigMap(client.CoreV1(), ns, configMap),
+		coreDNSDeployment: k8s.NewDeployment(client.AppsV1(), ns, deployment, configMap),
 	}
 
 	// Verify that the Zone file is exist in ConfigMap

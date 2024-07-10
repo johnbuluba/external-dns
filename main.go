@@ -290,7 +290,12 @@ func main() {
 	case "coredns", "skydns":
 		p, err = coredns.NewCoreDNSProvider(domainFilter, cfg.CoreDNSPrefix, cfg.DryRun)
 	case "corednsk8s":
-		p, err = corednsk8s.NewCoreDNSProvider(domainFilter, clientGenerator, cfg.DryRun)
+		p, err = corednsk8s.NewCoreDNSProvider(domainFilter, clientGenerator, 
+			corednsk8s.CoreDNSConfig{
+				CoreDNSDeployment: cfg.CoreDNSDeployment,
+				CoreDNSConfigMap: cfg.CoreDNSConfigMap,
+				CoreDNSNamespace: cfg.CoreDNSNamespace,
+			}, cfg.DryRun)
 	case "rdns":
 		p, err = rdns.NewRDNSProvider(
 			rdns.RDNSConfig{
