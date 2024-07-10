@@ -40,8 +40,6 @@ func (c *CoreDNSDeployment) MountZoneFile(ctx context.Context) error {
 
 	// Add the volume
 	added, err := c.addVolume(deployment)
-	// Add the volume mount
-	//added, err := c.addVolumeMount(deployment)
 	if err != nil {
 		return err
 	}
@@ -77,32 +75,4 @@ func (c *CoreDNSDeployment) addVolume(deployment *appsv1.Deployment) (bool, erro
 		}
 	}
 	return false, errors.New("coreDNS configMap not found in volumes")
-}
-
-// addVolumeMount adds volume mount for the Zone file in the CoreDNS Deployment
-//
-// Returns true  if the volume mount was added
-func (c *CoreDNSDeployment) addVolumeMount(deployment *appsv1.Deployment) (bool, error) {
-	// Add the Zone file volume mount
-	for i, container := range deployment.Spec.Template.Spec.Containers {
-		// Skip if not CoreDNS
-		if container.Name != "coredns" {
-			continue
-		}
-		// If the volume is already mounted skip
-		for _, volume := range container.VolumeMounts {
-			if volume.Name == ZoneKey {
-				return false, nil
-			}
-		}
-		// Append the new volume mount
-		added := append(deployment.Spec.Template.Spec.Containers[i].VolumeMounts, corev1.VolumeMount{
-			Name:      ZoneKey,
-			MountPath: ZonePath,
-			SubPath:   ZoneKey,
-		})
-		deployment.Spec.Template.Spec.Containers[i].VolumeMounts = added
-		return true, nil
-	}
-	return false, errors.New("coreDNS container not found in volume mounts")
 }

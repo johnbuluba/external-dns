@@ -20,13 +20,36 @@ func NewCoreDNSConfigEditor() *CoreDNSConfigEditor {
 	return &CoreDNSConfigEditor{}
 }
 
+// SetZones sets the zones in the file plugin in the Corefile
+func (c *CoreDNSConfigEditor) SetZones(zones []string) error {
+	// Remove the file entry
+	err := c.removeFileEntry()
+	if err != nil {
+		return err
+	}
+	// If there are no zones, return
+	if len(zones) == 0 {
+		return nil
+	}
+	// Cleanup the zone names
+	cleanUpZones := make([]string, len(zones))
+	for i, z := range zones {
+		cleanUpZones[i] = cleanUpZoneName(z)
+	}
+	// Update the file configuration
+	appendToLine := c.getLineToAppend()
+	entry := fmt.Sprintf("    file %s %s", ZoneFilePath, strings.Join(cleanUpZones, " "))
+	return c.addInLine(appendToLine, entry)
+}
+
 // AddZone adds a new zone in the file plugin
 func (c *CoreDNSConfigEditor) AddZone(zone string) error {
+	cleanZoneName := cleanUpZoneName(zone)
 	// Get existing zones
 	zones := c.GetZones()
 	// Check if the zone already exists
 	for _, z := range zones {
-		if z == zone {
+		if z == cleanZoneName {
 			return nil
 		}
 	}
@@ -36,7 +59,7 @@ func (c *CoreDNSConfigEditor) AddZone(zone string) error {
 		return err
 	}
 	// Update the file configuration
-	zones = append(zones, zone)
+	zones = append(zones, cleanZoneName)
 	appendToLine := c.getLineToAppend()
 	entry := fmt.Sprintf("    file %s %s", ZoneFilePath, strings.Join(zones, " "))
 	return c.addInLine(appendToLine, entry)
@@ -44,12 +67,13 @@ func (c *CoreDNSConfigEditor) AddZone(zone string) error {
 
 // RemoveZone removes a zone from the file plugin
 func (c *CoreDNSConfigEditor) RemoveZone(zone string) error {
+	cleanZoneName := cleanUpZoneName(zone)
 	// Get existing zones
 	zones := c.GetZones()
 	// Check if the zone exists
 	found := false
 	for i, z := range zones {
-		if z == zone {
+		if z == cleanZoneName {
 			found = true
 			zones = append(zones[:i], zones[i+1:]...)
 			break
@@ -189,4 +213,12 @@ func (c *CoreDNSConfigEditor) removeFileEntry() error {
 func (c *CoreDNSConfigEditor) getLineToAppend() int {
 	// TODO: Do something smarter (e.g. after a specific plugin)
 	return c.getMaxLine() - 2
+}
+
+// cleanUpZoneName removes the trailing dot from the zone name
+func cleanUpZoneName(zone string) string {
+	if strings.HasSuffix(zone, ".") {
+		return zone[:len(zone)-1]
+	}
+	return zone
 }

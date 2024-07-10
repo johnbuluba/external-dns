@@ -2,6 +2,9 @@ package manager
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"strings"
 
 	"github.com/miekg/dns"
 	log "github.com/sirupsen/logrus"
@@ -54,36 +57,38 @@ func NewRFC1035Manager(client kubernetes.Interface, deployment, configMap, ns st
 	return m, nil
 }
 
-func (m RFC1035Manager) Records(ctx context.Context) ([]*endpoint.Endpoint, error) {
+func (m *RFC1035Manager) Records(ctx context.Context) ([]*endpoint.Endpoint, error) {
 	// Get Zone from ConfigMap
-	zone, err := m.coreDNSConfigMap.GetZone(ctx)
+	zoneCfg, err := m.coreDNSConfigMap.GetZone(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// Parse it
-	err = m.zoneEditor.LoadZone(zone)
+	if err = m.zoneEditor.LoadZone(zoneCfg); err != nil {
+		return nil, err
+	}
 	// Get all records for every zone
 	records := make([]*endpoint.Endpoint, 0)
 	for _, zone := range m.zoneEditor.GetZones() {
 		for _, record := range m.zoneEditor.GetAllRecords(zone) {
 			switch r := record.(type) {
 			case *dns.A:
-				records = append(records, endpoint.NewEndpoint(r.Header().Name, endpoint.RecordTypeA, r.A.String()))
+				records = append(records, endpoint.NewEndpointWithTTL(r.Header().Name, endpoint.RecordTypeA, endpoint.TTL(r.Hdr.Ttl), r.A.String()))
 			case *dns.CNAME:
-				records = append(records, endpoint.NewEndpoint(r.Header().Name, endpoint.RecordTypeCNAME, r.Target))
+				records = append(records, endpoint.NewEndpointWithTTL(r.Header().Name, endpoint.RecordTypeCNAME, endpoint.TTL(r.Hdr.Ttl), r.Target))
 			case *dns.TXT:
-				records = append(records, endpoint.NewEndpoint(r.Header().Name, endpoint.RecordTypeTXT, r.Txt...))
+				records = append(records, endpoint.NewEndpointWithTTL(r.Header().Name, endpoint.RecordTypeTXT, endpoint.TTL(r.Hdr.Ttl), r.Txt...))
 			case *dns.SRV:
-				records = append(records, endpoint.NewEndpoint(r.Header().Name, endpoint.RecordTypeSRV, r.Target))
+				records = append(records, endpoint.NewEndpointWithTTL(r.Header().Name, endpoint.RecordTypeSRV, endpoint.TTL(r.Hdr.Ttl), r.Target))
 			case *dns.PTR:
-				records = append(records, endpoint.NewEndpoint(r.Header().Name, endpoint.RecordTypePTR, r.Ptr))
+				records = append(records, endpoint.NewEndpointWithTTL(r.Header().Name, endpoint.RecordTypePTR, endpoint.TTL(r.Hdr.Ttl), r.Ptr))
 			case *dns.MX:
-				records = append(records, endpoint.NewEndpoint(r.Header().Name, endpoint.RecordTypeMX, r.Mx))
+				records = append(records, endpoint.NewEndpointWithTTL(r.Header().Name, endpoint.RecordTypeMX, endpoint.TTL(r.Hdr.Ttl), r.Mx))
 			case *dns.AAAA:
-				records = append(records, endpoint.NewEndpoint(r.Header().Name, endpoint.RecordTypeAAAA, r.AAAA.String()))
+				records = append(records, endpoint.NewEndpointWithTTL(r.Header().Name, endpoint.RecordTypeAAAA, endpoint.TTL(r.Hdr.Ttl), r.AAAA.String()))
 			case *dns.NS:
-				records = append(records, endpoint.NewEndpoint(r.Header().Name, endpoint.RecordTypeNS, r.Ns))
+				records = append(records, endpoint.NewEndpointWithTTL(r.Header().Name, endpoint.RecordTypeNS, endpoint.TTL(r.Hdr.Ttl), r.Ns))
 			default:
 				//TODO implement me
 			}
@@ -92,15 +97,238 @@ func (m RFC1035Manager) Records(ctx context.Context) ([]*endpoint.Endpoint, erro
 	return records, nil
 }
 
-func (m RFC1035Manager) ApplyChanges(ctx context.Context, changes *plan.Changes) error {
-	//TODO implement me
-
-	for _, change := range changes.Create {
-		logFields := log.Fields{
-			"record":   change.DNSName,
-			"type":     change.RecordType,
+func (m *RFC1035Manager) ApplyChanges(ctx context.Context, changes *plan.Changes) error {
+	// Reload the Corefile and Zone file
+	if err := m.reload(ctx); err != nil {
+		return err
+	}
+	// Create new records
+	if createChanges := changes.Create; len(createChanges) > 0 {
+		if err := m.applyCreate(createChanges); err != nil {
+			return err
 		}
-		log.WithFields(logFields).Info("Creating Record")
+	}
+	// Update records
+	if updateChanges := changes.UpdateNew; len(updateChanges) > 0 {
+		if err := m.applyUpdate(changes.UpdateOld, updateChanges); err != nil {
+			return err
+		}
+	}
+	// Delete records
+	if deleteChanges := changes.Delete; len(deleteChanges) > 0 {
+		if err := m.applyDelete(deleteChanges); err != nil {
+			return err
+		}
+	}
+	// Apply changes
+	return m.commit(ctx)
+}
+
+// applyCreate applies the create changes from the endpoints array
+func (m *RFC1035Manager) applyCreate(endpoints []*endpoint.Endpoint) error {
+	for _, endPt := range endpoints {
+		logFields := log.Fields{
+			"record": endPt.DNSName,
+			"type":   endPt.RecordType,
+		}
+		log.WithFields(logFields).Debug("Creating record")
+		zone := getZone(endPt.DNSName)
+		record := endpointToRecord(endPt)
+		if record == nil {
+			log.WithFields(logFields).Warn("Could not map record to DNS entry")
+			continue
+		}
+		m.zoneEditor.AddRecord(zone, record)
+	}
+	return nil
+}
+
+// applyUpdate applies the update changes from the endpoints array
+func (m *RFC1035Manager) applyUpdate(endpointsOld, endpointsNew []*endpoint.Endpoint) error {
+	if len(endpointsOld) != len(endpointsNew) {
+		return fmt.Errorf("old and new endpoints length mismatch")
+	}
+	for i, endPtOld := range endpointsOld {
+		endPtNew := endpointsNew[i]
+		logFields := log.Fields{
+			"old":    map[string]interface{}{"record": endPtOld.DNSName, "type": endPtOld.RecordType},
+			"new":    map[string]interface{}{"record": endPtNew.DNSName, "type": endPtNew.RecordType},
+			"record": endPtOld.DNSName,
+			"type":   endPtOld.RecordType,
+		}
+		log.WithFields(logFields).Debug("Updating record")
+		zone := getZone(endPtOld.DNSName)
+		recordOld := endpointToRecord(endPtOld)
+		recordNew := endpointToRecord(endPtNew)
+		if recordOld == nil || recordNew == nil {
+			log.WithFields(logFields).Warn("Could not map record to DNS entry")
+			continue
+		}
+		m.zoneEditor.UpdateRecord(zone, recordOld, recordNew)
+	}
+	return nil
+}
+
+// applyDelete applies the delete changes from the endpoints array
+func (m *RFC1035Manager) applyDelete(endpoints []*endpoint.Endpoint) error {
+	for _, endPt := range endpoints {
+		logFields := log.Fields{
+			"record": endPt.DNSName,
+			"type":   endPt.RecordType,
+		}
+		log.WithFields(logFields).Debug("Deleting record")
+		zone := getZone(endPt.DNSName)
+		record := endpointToRecord(endPt)
+		if record == nil {
+			log.WithFields(logFields).Warn("Could not map record to DNS entry")
+			continue
+		}
+		m.zoneEditor.DeleteRecord(zone, record)
+	}
+	return nil
+}
+
+// reload reloads the Corefile and Zone file
+func (m *RFC1035Manager) reload(ctx context.Context) error {
+	// Reload the Corefile
+	if corefile, err := m.coreDNSConfigMap.GetCoreDNSConfig(ctx); err == nil {
+		if err = m.coreDNSEditor.LoadCorefile(corefile); err != nil {
+			return err
+		}
+	} else {
+		return err
+	}
+
+	// Reload the Zone file
+	if zone, err := m.coreDNSConfigMap.GetZone(ctx); err == nil {
+		if err = m.zoneEditor.LoadZone(zone); err != nil {
+			return err
+		}
+	} else {
+		return err
+	}
+	return nil
+}
+
+// commit saves the changes to the Corefile and Zone file
+func (m *RFC1035Manager) commit(ctx context.Context) error {
+	// Update zones in corefile
+	zones := m.zoneEditor.GetZones()
+	if err := m.coreDNSEditor.SetZones(zones); err != nil {
+		return err
+	}
+
+	// Update records in zone file
+	if err := m.coreDNSConfigMap.UpdateCoreDNSConfig(ctx, m.coreDNSEditor.GetConfig()); err != nil {
+		return err
+	}
+	// Update zones in zone file
+	if err := m.coreDNSConfigMap.UpdateZone(ctx, m.zoneEditor.RenderZone()); err != nil {
+		return err
+	}
+	return nil
+}
+
+// getZone returns the n-1 parts of the TLD (e.g. "test.example.com" -> "example.com.")
+func getZone(domain string) string {
+	parts := dns.SplitDomainName(domain)
+	if len(parts) < 3 {
+		panic("invalid domain")
+	}
+
+	zone := strings.Join(parts[1:], ".")
+	zone = fmt.Sprintf("%s.", zone)
+	return zone
+}
+
+// EndpointToRecord converts an endpoint to a DNS record.
+func endpointToRecord(endpt *endpoint.Endpoint) dns.RR {
+	switch endpt.RecordType {
+	case endpoint.RecordTypeA:
+		return &dns.A{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(endpt.DNSName),
+				Rrtype: dns.TypeA,
+				Class:  dns.ClassINET,
+				Ttl:    uint32(endpt.RecordTTL),
+			},
+			A: net.ParseIP(endpt.Targets[0]),
+		}
+	case endpoint.RecordTypeCNAME:
+		return &dns.CNAME{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(endpt.DNSName),
+				Rrtype: dns.TypeCNAME,
+				Class:  dns.ClassINET,
+				Ttl:    uint32(endpt.RecordTTL),
+			},
+			Target: endpt.Targets[0],
+		}
+	case endpoint.RecordTypeTXT:
+		// Remove quotes from targets
+		trimmedTargets := make([]string, len(endpt.Targets))
+		for i, target := range endpt.Targets {
+			trimmedTargets[i] = strings.Trim(target, "\"")
+		}
+		return &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(endpt.DNSName),
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+				Ttl:    uint32(endpt.RecordTTL),
+			},
+			Txt: trimmedTargets,
+		}
+	case endpoint.RecordTypeSRV:
+		return &dns.SRV{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(endpt.DNSName),
+				Rrtype: dns.TypeSRV,
+				Class:  dns.ClassINET,
+				Ttl:    uint32(endpt.RecordTTL),
+			},
+			Target: endpt.Targets[0],
+		}
+	case endpoint.RecordTypePTR:
+		return &dns.PTR{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(endpt.DNSName),
+				Rrtype: dns.TypePTR,
+				Class:  dns.ClassINET,
+				Ttl:    uint32(endpt.RecordTTL),
+			},
+			Ptr: endpt.Targets[0],
+		}
+	case endpoint.RecordTypeMX:
+		return &dns.MX{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(endpt.DNSName),
+				Rrtype: dns.TypeMX,
+				Class:  dns.ClassINET,
+				Ttl:    uint32(endpt.RecordTTL),
+			},
+			Mx: endpt.Targets[0],
+		}
+	case endpoint.RecordTypeAAAA:
+		return &dns.AAAA{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(endpt.DNSName),
+				Rrtype: dns.TypeAAAA,
+				Class:  dns.ClassINET,
+				Ttl:    uint32(endpt.RecordTTL),
+			},
+			AAAA: net.ParseIP(endpt.Targets[0]),
+		}
+	case endpoint.RecordTypeNS:
+		return &dns.NS{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(endpt.DNSName),
+				Rrtype: dns.TypeNS,
+				Class:  dns.ClassINET,
+				Ttl:    uint32(endpt.RecordTTL),
+			},
+			Ns: endpt.Targets[0],
+		}
 	}
 	return nil
 }

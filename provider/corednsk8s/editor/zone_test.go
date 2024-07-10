@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"net"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -53,6 +54,75 @@ func (s *ZoneEditorTestSuite) TestLoadZone_InvalidZone() {
 	s.Require().Error(err, "LoadZone should return an error for invalid zone file")
 }
 
+func (s *ZoneEditorTestSuite) TestAddRecord_NewRecord() {
+	zone := "example.com."
+	record := &dns.A{
+		Hdr: dns.RR_Header{Name: zone, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+		A:   net.ParseIP("192.0.2.1"),
+	}
+
+	s.editor.AddRecord(zone, record)
+	records := s.editor.GetAllRecords(zone)
+
+	s.Require().Contains(records, record, "Newly added record should be present in the zone")
+}
+
+func (s *ZoneEditorTestSuite) TestUpdateRecord_ExistingRecord() {
+	zone := "example.com."
+	oldRecord := &dns.A{
+		Hdr: dns.RR_Header{Name: "ns." + zone, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+		A:   net.ParseIP("192.0.2.1"),
+	}
+	newRecord := &dns.A{
+		Hdr: dns.RR_Header{Name: "ns." + zone, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+		A:   net.ParseIP("192.0.2.2"),
+	}
+
+	// Assuming oldRecord is already added
+	s.editor.AddRecord(zone, oldRecord)
+	s.editor.UpdateRecord(zone, oldRecord, newRecord)
+
+	updatedRecords := s.editor.GetAllRecords(zone)
+	s.Require().Contains(updatedRecords, newRecord, "Updated record should be present in the zone")
+	s.Require().NotContains(updatedRecords, oldRecord, "Old record should not be present in the zone after update")
+}
+
+func (s *ZoneEditorTestSuite) TestDeleteRecord() {
+	zone := "example.com."
+	otherRecord := &dns.A{
+		Hdr: dns.RR_Header{Name: "www." + zone, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+		A:   net.ParseIP("192.0.2.5"),
+	}
+	s.editor.AddRecord(zone, otherRecord)
+	recordToDelete := &dns.A{
+		Hdr: dns.RR_Header{Name: "ns." + zone, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+		A:   net.ParseIP("192.0.2.1"),
+	}
+
+	// Assuming recordToDelete is already added
+	s.editor.AddRecord(zone, recordToDelete)
+	s.editor.DeleteRecord(zone, recordToDelete)
+
+	recordsAfterDeletion := s.editor.GetAllRecords(zone)
+	s.Require().NotContains(recordsAfterDeletion, recordToDelete, "Deleted record should not be present in the zone")
+}
+
+func (s *ZoneEditorTestSuite) TestDeleteRecord_LastRecord() {
+	zone := "example.com."
+	recordToDelete := &dns.A{
+		Hdr: dns.RR_Header{Name: "ns." + zone, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+		A:   net.ParseIP("192.0.2.1"),
+	}
+
+	// Assuming recordToDelete is already added
+	s.editor.AddRecord(zone, recordToDelete)
+	s.editor.DeleteRecord(zone, recordToDelete)
+
+	recordsAfterDeletion := s.editor.GetAllRecords(zone)
+	s.Require().NotContains(recordsAfterDeletion, recordToDelete, "Deleted record should not be present in the zone")
+	s.Require().NotContains(s.editor.GetZones(), zone, "The zone should be removed if it has no records left")
+}
+
 func (s *ZoneEditorTestSuite) TestRenderZone() {
 	zoneFile := `$ORIGIN example.com.
 @ 3600 IN SOA ns.example.com. hostmaster.example.com. (
@@ -76,56 +146,6 @@ ns.example.com.	3600	IN	A	192.0.2.1
 
 	renderedZone := s.editor.RenderZone()
 	s.Require().Contains(expectedRender, renderedZone, "RenderZone output should match the expected render")
-}
-
-func (s *ZoneEditorTestSuite) TestAddARecord() {
-	zone := "example.com."
-	name := "test.example.com."
-	ip := "192.0.2.1"
-
-	s.editor.AddARecord(zone, name, ip)
-
-	records, found := s.editor.entriesByZone[zone]
-	s.Require().True(found, "Zone should exist after adding an A record")
-
-	foundRecord := false
-	for _, record := range records {
-		if aRecord, ok := record.(*dns.A); ok {
-			if aRecord.Hdr.Name == name && aRecord.A.String() == ip {
-				foundRecord = true
-				break
-			}
-		}
-	}
-
-	s.Require().True(foundRecord, "A record should be found in the zone")
-}
-
-func (s *ZoneEditorTestSuite) TestAddARecord_SecondTime() {
-	zone := "example.com."
-	name := "test.example.com."
-	ip := "192.0.2.1"
-
-	// Add the first time
-	s.editor.AddARecord(zone, name, ip)
-	// Add a second time with different IP
-	ip = "192.0.2.2"
-	s.editor.AddARecord(zone, name, ip)
-
-	records, found := s.editor.entriesByZone[zone]
-	s.Require().True(found, "Zone should exist after adding an A record")
-
-	foundRecord := false
-	for _, record := range records {
-		if aRecord, ok := record.(*dns.A); ok {
-			if aRecord.Hdr.Name == name && aRecord.A.String() == ip {
-				foundRecord = true
-				break
-			}
-		}
-	}
-
-	s.Require().True(foundRecord, "A record should be found in the zone")
 }
 
 func TestZoneEditorTestSuite(t *testing.T) {

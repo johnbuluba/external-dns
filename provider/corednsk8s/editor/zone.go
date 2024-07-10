@@ -2,7 +2,6 @@ package editor
 
 import (
 	"fmt"
-	"net"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -21,6 +20,7 @@ func NewZoneEditor() *ZoneEditor {
 
 // LoadZone loads a zone file
 func (z *ZoneEditor) LoadZone(zoneFile string) error {
+	z.entriesByZone = make(map[string][]dns.RR)
 	parser := dns.NewZoneParser(strings.NewReader(zoneFile), "", "")
 	zone := ""
 	for rr, ok := parser.Next(); ok; rr, ok = parser.Next() {
@@ -43,26 +43,45 @@ func (z *ZoneEditor) LoadZone(zoneFile string) error {
 	return parser.Err()
 }
 
-// AddARecord adds an A record to the zone
-func (z *ZoneEditor) AddARecord(zone, name, ip string) {
+// AddRecord adds a record to the zone
+func (z *ZoneEditor) AddRecord(zone string, record dns.RR) {
 	zoneRecords := z.GetOrCreateZone(zone)
-	// Check if record already exists
-	if r := z.GetRecordByTypeAndName(zone, name, dns.TypeA); r != nil {
-		// Check if the IP is the same
-		if aRecord, ok := r.(*dns.A); ok {
-			if aRecord.A.String() == ip {
-				return
-			}
-		}
-		// If the IP is different, remove the record
-		z.RemoveRecord(zone, name, dns.TypeA)
-	}
-
-	zoneRecords = append(zoneRecords, &dns.A{
-		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
-		A:   net.ParseIP(ip),
-	})
+	zoneRecords = append(zoneRecords, record)
 	z.entriesByZone[zone] = zoneRecords
+	z.increaseZoneSerial(zone)
+}
+
+// UpdateRecord updates a record in the zone
+func (z *ZoneEditor) UpdateRecord(zone string, oldRecord, newRecord dns.RR) {
+	zoneRecords := z.GetOrCreateZone(zone)
+	newRecords := make([]dns.RR, 0)
+	for _, r := range zoneRecords {
+		if r.String() == oldRecord.String() {
+			newRecords = append(newRecords, newRecord)
+		} else {
+			newRecords = append(newRecords, r)
+		}
+	}
+	z.entriesByZone[zone] = newRecords
+	z.increaseZoneSerial(zone)
+}
+
+// DeleteRecord deletes a record from the zone
+func (z *ZoneEditor) DeleteRecord(zone string, record dns.RR) {
+	zoneRecords := z.GetOrCreateZone(zone)
+	newRecords := make([]dns.RR, 0)
+	for _, r := range zoneRecords {
+		if !(r.Header().Name == record.Header().Name && r.Header().Rrtype == record.Header().Rrtype) {
+			newRecords = append(newRecords, r)
+		}
+	}
+	// If only the SOA record is left, remove the zone
+	if len(newRecords) == 1 {
+		delete(z.entriesByZone, zone)
+		return
+	}
+	z.entriesByZone[zone] = newRecords
+	z.increaseZoneSerial(zone)
 }
 
 // GetZones returns all zones
@@ -83,20 +102,6 @@ func (z *ZoneEditor) GetAllRecords(zone string) []dns.RR {
 	return records
 }
 
-// GetRecordByTypeAndName returns a record by type and name
-func (z *ZoneEditor) GetRecordByTypeAndName(zone, name string, recordType uint16) dns.RR {
-	records, found := z.entriesByZone[zone]
-	if !found {
-		return nil
-	}
-	for _, record := range records {
-		if record.Header().Name == name && record.Header().Rrtype == recordType {
-			return record
-		}
-	}
-	return nil
-}
-
 // RenderZone prints the zone file
 func (z *ZoneEditor) RenderZone() string {
 	var sb strings.Builder
@@ -109,19 +114,6 @@ func (z *ZoneEditor) RenderZone() string {
 		}
 	}
 	return sb.String()
-}
-
-// RemoveRecord removes a record from the zone
-func (z *ZoneEditor) RemoveRecord(zone, name string, recordType uint16) {
-	zoneRecords := z.GetOrCreateZone(zone)
-	newRecords := make([]dns.RR, 0)
-	for _, record := range zoneRecords {
-		if record.Header().Name == name && record.Header().Rrtype == recordType {
-			continue
-		}
-		newRecords = append(newRecords, record)
-	}
-	z.entriesByZone[zone] = newRecords
 }
 
 // GetOrCreateZone returns the records for a zone, creating it if it doesn't exist
@@ -150,4 +142,18 @@ func (z *ZoneEditor) GetOrCreateZone(zone string) []dns.RR {
 		z.entriesByZone[zone] = records
 	}
 	return records
+}
+
+// increaseZoneSerial increases the serial number of the SOA record for the zone
+//
+// This is required to notify the CoreDNS server that the zone has been updated.
+func (z *ZoneEditor) increaseZoneSerial(zone string) {
+	zoneRecords := z.GetOrCreateZone(zone)
+	for _, record := range zoneRecords {
+		if soa, ok := record.(*dns.SOA); ok {
+			soa.Serial++
+			z.entriesByZone[zone] = zoneRecords
+			return
+		}
+	}
 }

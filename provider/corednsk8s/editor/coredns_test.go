@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,6 +39,7 @@ func (s *CoreDNSConfigEditorTestSuite) SetupTest() {
 	loadbalance
 }
 `
+	s.Require().NoError(s.config.LoadCorefile(s.testConfig))
 }
 
 func (s *CoreDNSConfigEditorTestSuite) TestNewCoreDNSConfig() {
@@ -54,6 +56,41 @@ func (s *CoreDNSConfigEditorTestSuite) TestLoadCorefile_Error() {
 	config := "invalid {:}} invalid {"
 	err := s.config.LoadCorefile(config)
 	assert.NotNil(s.T(), err, "LoadCorefile should return an error for invalid input")
+}
+
+func (s *CoreDNSConfigEditorTestSuite) TestSetZones_MultipleZones() {
+	zones := []string{"example.com", "test.com"}
+	err := s.config.SetZones(zones)
+	s.Require().Nil(err, "SetZones should not return an error for valid zones")
+
+	// Assert the zones were added
+	actualZones := s.config.GetZones()
+	for _, zone := range zones {
+		s.Contains(actualZones, zone, fmt.Sprintf("Zone %s should be present in the zones list", zone))
+	}
+}
+
+func (s *CoreDNSConfigEditorTestSuite) TestSetZones_EmptyZones() {
+	err := s.config.SetZones([]string{})
+	s.Require().Nil(err, "SetZones should not return an error for an empty zones list")
+
+	// Assert no zones are present
+	actualZones := s.config.GetZones()
+	s.Len(actualZones, 0, "No zones should be present in the zones list")
+}
+
+func (s *CoreDNSConfigEditorTestSuite) TestSetZones_RemoveExistingZones() {
+	// Initially set some zones
+	initialZones := []string{"example.com", "test.com"}
+	s.config.SetZones(initialZones)
+
+	// Now remove all zones
+	err := s.config.SetZones([]string{})
+	s.Require().Nil(err, "SetZones should not return an error when removing all zones")
+
+	// Assert no zones are present
+	actualZones := s.config.GetZones()
+	s.Len(actualZones, 0, "No zones should be present after removing them")
 }
 
 func (s *CoreDNSConfigEditorTestSuite) TestGetZones() {
