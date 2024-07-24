@@ -280,11 +280,11 @@ func (s *CoreDNSConfigEditorTestSuite) TestSetHosts_MultipleHosts() {
 	s.Require().Nil(err, "LoadCorefile should not return an error")
 	hosts := []dns.A{
 		{
-			Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+			Hdr: dns.RR_Header{Name: "example.com", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
 			A:   net.ParseIP("192.0.2.1"),
 		},
 		{
-			Hdr: dns.RR_Header{Name: "test.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+			Hdr: dns.RR_Header{Name: "test.com", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
 			A:   net.ParseIP("192.0.2.2"),
 		},
 	}
